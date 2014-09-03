@@ -31,12 +31,12 @@ class GeventLoop(object):
         self._exit = AsyncResult()
 
     def _greenlet_spawned(self, greenlet):
-        greenlet.link(self._greenlet_callback)
+        greenlet.link(self._greenlet_completed)
         greenlet.link_exception(self._greenlet_failed)
         self._greenlets.add(greenlet)
         return greenlet
 
-    def _greenlet_callback(self, greenlet):
+    def _greenlet_completed(self, greenlet):
         self._greenlets.discard(greenlet)
         self._entering_idle()
 
