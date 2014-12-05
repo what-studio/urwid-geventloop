@@ -15,6 +15,7 @@
 import gevent
 from gevent import select
 from gevent.event import AsyncResult
+from urwid import ExitMainLoop
 
 
 __version__ = '0.0.0.dev'
@@ -88,7 +89,7 @@ class GeventLoop(object):
             return False
         return True
 
-    def run(self):
+    def _run(self):
         while True:
             greenlets = [self._exit]
             greenlets.extend(self._greenlets)
@@ -97,3 +98,9 @@ class GeventLoop(object):
             except gevent.Timeout:
                 pass
             self._entering_idle()
+
+    def run(self):
+        try:
+            self._run()
+        except ExitMainLoop:
+            pass
