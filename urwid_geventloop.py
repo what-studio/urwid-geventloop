@@ -14,7 +14,6 @@
 """
 import gevent
 from gevent import select
-from gevent.event import AsyncResult
 from urwid import ExitMainLoop
 
 
@@ -26,23 +25,16 @@ class GeventLoop(object):
 
     def __init__(self):
         super(GeventLoop, self).__init__()
-        self._greenlets = set()
-        self._idle_handle = 0
-        self._idle_callbacks = {}
-        self._exit = AsyncResult()
+        self._greenlets = []
+        self._idle_callbacks = []
 
     def _greenlet_spawned(self, greenlet):
         greenlet.link(self._greenlet_completed)
-        greenlet.link_exception(self._greenlet_failed)
-        self._greenlets.add(greenlet)
+        self._greenlets.append(greenlet)
         return greenlet
 
     def _greenlet_completed(self, greenlet):
-        self._greenlets.discard(greenlet)
         self._entering_idle()
-
-    def _greenlet_failed(self, greenlet):
-        self._exit.set_exception(greenlet.exception)
 
     # alarm
 
@@ -74,33 +66,33 @@ class GeventLoop(object):
     # idle
 
     def _entering_idle(self):
-        for callback in self._idle_callbacks.values():
+        for callback in self._idle_callbacks:
             callback()
 
     def enter_idle(self, callback):
-        self._idle_handle += 1
-        self._idle_callbacks[self._idle_handle] = callback
-        return self._idle_handle
+        self._idle_callbacks.append(callback)
+        return callback
 
     def remove_enter_idle(self, handle):
         try:
-            del self._idle_callbacks[handle]
+            self._idle_callbacks.remove(handle)
         except KeyError:
             return False
         return True
 
-    def _run(self):
-        while True:
-            greenlets = [self._exit]
-            greenlets.extend(self._greenlets)
-            try:
-                gevent.joinall(greenlets, timeout=1, raise_error=True)
-            except gevent.Timeout:
-                pass
-            self._entering_idle()
-
     def run(self):
         try:
-            self._run()
+            while True:
+                completed_greenlets = []
+                for greenlet in self._greenlets:
+                    try:
+                        greenlet.get(block=False)
+                        completed_greenlets.append(greenlet)
+                    except gevent.Timeout:
+                        pass
+                for greenlet in completed_greenlets:
+                    self._greenlets.remove(greenlet)
+                self._entering_idle()
+                gevent.sleep(1)
         except ExitMainLoop:
             pass
