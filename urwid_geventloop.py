@@ -28,20 +28,18 @@ class GeventLoop(object):
         super(GeventLoop, self).__init__()
         self._completed_greenlets = deque()
         self._idle_callbacks = []
-
-    def _greenlet_spawned(self, greenlet):
-        greenlet.link(self._greenlet_completed)
-        return greenlet
+        self._idle_event = gevent.event.Event()
 
     def _greenlet_completed(self, greenlet):
         self._completed_greenlets.append(greenlet)
-        self._entering_idle()
+        self._idle_event.set()
 
     # alarm
 
     def alarm(self, seconds, callback):
         greenlet = gevent.spawn_later(seconds, callback)
-        return self._greenlet_spawned(greenlet)
+        greenlet.link(self._greenlet_completed)
+        return greenlet
 
     def remove_alarm(self, handle):
         if handle._start_event.active:
@@ -54,21 +52,18 @@ class GeventLoop(object):
     def _watch_file(self, fd, callback):
         while True:
             select.select([fd], [], [])
-            self._greenlet_spawned(gevent.spawn(callback))
+            gevent.spawn(callback).link(self._greenlet_completed)
 
     def watch_file(self, fd, callback):
         greenlet = gevent.spawn(self._watch_file, fd, callback)
-        return self._greenlet_spawned(greenlet)
+        greenlet.link(self._greenlet_completed)
+        return greenlet
 
     def remove_watch_file(self, handle):
         handle.kill()
         return True
 
     # idle
-
-    def _entering_idle(self):
-        for callback in self._idle_callbacks:
-            callback()
 
     def enter_idle(self, callback):
         self._idle_callbacks.append(callback)
@@ -84,9 +79,11 @@ class GeventLoop(object):
     def run(self):
         try:
             while True:
+                for callback in self._idle_callbacks:
+                    callback()
                 while len(self._completed_greenlets) > 0:
                     self._completed_greenlets.popleft().get(block=False)
-                self._entering_idle()
-                gevent.sleep(1)
+                if self._idle_event.wait(timeout=1):
+                    self._idle_event.clear()
         except ExitMainLoop:
             pass
