@@ -15,6 +15,7 @@
 import gevent
 from gevent import select
 from urwid import ExitMainLoop
+from collections import deque
 
 
 __version__ = '0.0.0.dev'
@@ -25,15 +26,15 @@ class GeventLoop(object):
 
     def __init__(self):
         super(GeventLoop, self).__init__()
-        self._greenlets = []
+        self._completed_greenlets = deque()
         self._idle_callbacks = []
 
     def _greenlet_spawned(self, greenlet):
         greenlet.link(self._greenlet_completed)
-        self._greenlets.append(greenlet)
         return greenlet
 
     def _greenlet_completed(self, greenlet):
+        self._completed_greenlets.append(greenlet)
         self._entering_idle()
 
     # alarm
@@ -83,15 +84,8 @@ class GeventLoop(object):
     def run(self):
         try:
             while True:
-                completed_greenlets = []
-                for greenlet in self._greenlets:
-                    try:
-                        greenlet.get(block=False)
-                        completed_greenlets.append(greenlet)
-                    except gevent.Timeout:
-                        pass
-                for greenlet in completed_greenlets:
-                    self._greenlets.remove(greenlet)
+                while len(self._completed_greenlets) > 0:
+                    self._completed_greenlets.popleft().get(block=False)
                 self._entering_idle()
                 gevent.sleep(1)
         except ExitMainLoop:
