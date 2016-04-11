@@ -14,8 +14,8 @@
 """
 import gevent
 from gevent import select
-from gevent.event import AsyncResult
 from urwid import ExitMainLoop
+from collections import deque
 
 
 __version__ = '0.0.0.dev'
@@ -26,29 +26,20 @@ class GeventLoop(object):
 
     def __init__(self):
         super(GeventLoop, self).__init__()
-        self._greenlets = set()
-        self._idle_handle = 0
-        self._idle_callbacks = {}
-        self._exit = AsyncResult()
-
-    def _greenlet_spawned(self, greenlet):
-        greenlet.link(self._greenlet_completed)
-        greenlet.link_exception(self._greenlet_failed)
-        self._greenlets.add(greenlet)
-        return greenlet
+        self._completed_greenlets = deque()
+        self._idle_callbacks = []
+        self._idle_event = gevent.event.Event()
 
     def _greenlet_completed(self, greenlet):
-        self._greenlets.discard(greenlet)
-        self._entering_idle()
-
-    def _greenlet_failed(self, greenlet):
-        self._exit.set_exception(greenlet.exception)
+        self._completed_greenlets.append(greenlet)
+        self._idle_event.set()
 
     # alarm
 
     def alarm(self, seconds, callback):
         greenlet = gevent.spawn_later(seconds, callback)
-        return self._greenlet_spawned(greenlet)
+        greenlet.link(self._greenlet_completed)
+        return greenlet
 
     def remove_alarm(self, handle):
         if handle._start_event.active:
@@ -61,11 +52,12 @@ class GeventLoop(object):
     def _watch_file(self, fd, callback):
         while True:
             select.select([fd], [], [])
-            self._greenlet_spawned(gevent.spawn(callback))
+            gevent.spawn(callback).link(self._greenlet_completed)
 
     def watch_file(self, fd, callback):
         greenlet = gevent.spawn(self._watch_file, fd, callback)
-        return self._greenlet_spawned(greenlet)
+        greenlet.link(self._greenlet_completed)
+        return greenlet
 
     def remove_watch_file(self, handle):
         handle.kill()
@@ -73,34 +65,25 @@ class GeventLoop(object):
 
     # idle
 
-    def _entering_idle(self):
-        for callback in self._idle_callbacks.values():
-            callback()
-
     def enter_idle(self, callback):
-        self._idle_handle += 1
-        self._idle_callbacks[self._idle_handle] = callback
-        return self._idle_handle
+        self._idle_callbacks.append(callback)
+        return callback
 
     def remove_enter_idle(self, handle):
         try:
-            del self._idle_callbacks[handle]
+            self._idle_callbacks.remove(handle)
         except KeyError:
             return False
         return True
 
-    def _run(self):
-        while True:
-            greenlets = [self._exit]
-            greenlets.extend(self._greenlets)
-            try:
-                gevent.joinall(greenlets, timeout=1, raise_error=True)
-            except gevent.Timeout:
-                pass
-            self._entering_idle()
-
     def run(self):
         try:
-            self._run()
+            while True:
+                for callback in self._idle_callbacks:
+                    callback()
+                while len(self._completed_greenlets) > 0:
+                    self._completed_greenlets.popleft().get(block=False)
+                if self._idle_event.wait(timeout=1):
+                    self._idle_event.clear()
         except ExitMainLoop:
             pass
